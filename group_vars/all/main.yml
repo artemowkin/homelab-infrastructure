@@ -1,0 +1,3 @@
+ansible_user: debian
+
+swarm_base_directory: /opt/swarm

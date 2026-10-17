@@ -1,0 +1,35 @@
+# Ansible local settings
+ansible/inventory/local.yml
+ansible/.vault-password
+*.retry
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OpenTofu
+**/.terraform/
+**/.tofu/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+
+# OpenTofu local variables
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Credentials
+.env
+
+.env.*
+!.env.example
+
+# Private SSH keys
+id_rsa
+id_ed25519
+
+*.pem

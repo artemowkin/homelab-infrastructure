@@ -1,0 +1,41 @@
+---
+- name: Bootstrap Portainer
+  hosts: docker_swarm_managers
+  become: true
+  tasks:
+    - name: Create Portainer directory
+      ansible.builtin.file:
+        path: /opt/swarm/portainer
+        state: directory
+        mode: "0755"
+
+    - name: Upload Portainer stack
+      ansible.builtin.copy:
+        src: ../stacks/portainer/compose.yml
+        dest: /opt/swarm/portainer/compose.yml
+        mode: "0644"
+      register: portainer_compose
+
+    - name: Check Portainer stack
+      ansible.builtin.command:
+        argv:
+          - docker
+          - stack
+          - ls
+          - --format
+          - "{% raw %}{{.Name}}{% endraw %}"
+      register: deployed_stacks
+      changed_when: false
+
+    - name: Deploy Portainer
+      ansible.builtin.command:
+        argv:
+          - docker
+          - stack
+          - deploy
+          - --compose-file
+          - /opt/swarm/portainer/compose.yml
+          - portainer
+      when: >
+        portainer_compose.changed or
+        'portainer' not in deployed_stacks.stdout_lines

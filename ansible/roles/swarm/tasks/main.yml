@@ -1,0 +1,21 @@
+---
+- name: Check current Swarm state
+  ansible.builtin.command:
+    argv:
+      - docker
+      - info
+      - --format
+      - "{% raw %}{{.Swarm.LocalNodeState}}{% endraw %}"
+  register: swarm_state
+  changed_when: false
+
+- name: Initialize Docker Swarm
+
+  ansible.builtin.command:
+    argv:
+      - docker
+      - swarm
+      - init
+      - --advertise-addr
+      - "{{ ansible_host }}"
+  when: swarm_state.stdout == "inactive"
