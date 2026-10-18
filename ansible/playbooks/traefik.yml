@@ -1,0 +1,97 @@
+---
+- name: Deploy Traefik to Docker Swarm
+  hosts: docker_swarm_managers
+  become: true
+  vars:
+    traefik_directory: /opt/swarm/traefik
+  tasks:
+    - name: Check existing overlay network
+      ansible.builtin.command:
+        argv:
+          - docker
+          - network
+          - inspect
+          - traefik-public
+      register: traefik_network
+      changed_when: false
+      failed_when: false
+    - name: Create Traefik overlay network
+      ansible.builtin.command:
+        argv:
+          - docker
+          - network
+          - create
+          - --driver
+          - overlay
+          - --attachable
+          - traefik-public
+      when: traefik_network.rc != 0
+    - name: Create Traefik directory
+      ansible.builtin.file:
+        path: "{{ traefik_directory }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+    - name: Upload Traefik configuration
+      ansible.builtin.copy:
+        src: ../stacks/traefik/traefik.yml
+        dest: "{{ traefik_directory }}/traefik.yml"
+        owner: root
+        group: root
+        mode: "0644"
+      register: traefik_config
+    - name: Upload Traefik Compose file
+      ansible.builtin.copy:
+        src: ../stacks/traefik/compose.yml
+        dest: "{{ traefik_directory }}/compose.yml"
+        owner: root
+        group: root
+        mode: "0644"
+      register: traefik_compose
+    - name: Check required Docker secrets
+      ansible.builtin.command:
+        argv:
+          - docker
+          - secret
+          - inspect
+          - "{{ item }}"
+      loop:
+        - regru_username
+        - regru_password
+      changed_when: false
+    - name: Get deployed stacks
+      ansible.builtin.command:
+        argv:
+          - docker
+          - stack
+          - ls
+          - --format
+          - "{{ '{{.Name}}' }}"
+      register: deployed_stacks
+      changed_when: false
+    - name: Deploy Traefik stack
+      ansible.builtin.command:
+        argv:
+          - docker
+          - stack
+          - deploy
+          - --detach=true
+          - --compose-file
+          - "{{ traefik_directory }}/compose.yml"
+          - traefik
+      when: >
+        traefik_compose.changed or
+        traefik_config.changed or
+        'traefik' not in deployed_stacks.stdout_lines
+    - name: Restart Traefik after configuration change
+      ansible.builtin.command:
+        argv:
+          - docker
+          - service
+          - update
+          - --force
+          - traefik_traefik
+      when:
+        - traefik_config.changed
+        - "'traefik' in deployed_stacks.stdout_lines"

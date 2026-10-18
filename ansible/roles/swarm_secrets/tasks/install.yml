@@ -1,0 +1,63 @@
+---
+- name: Install build dependencies
+  ansible.builtin.apt:
+    name:
+      - git
+      - ca-certificates
+    state: present
+    update_cache: true
+
+- name: Check installed plugin
+  ansible.builtin.command:
+    argv:
+      - docker
+      - plugin
+      - inspect
+      - "{{ swarm_secrets_plugin_name }}"
+  register: swarm_secrets_installed
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Create plugin runtime directory
+  ansible.builtin.file:
+    path: /run/swarm-external-secrets
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Configure persistent runtime directory
+  ansible.builtin.copy:
+    dest: /etc/tmpfiles.d/swarm-external-secrets.conf
+    content: |
+      d /run/swarm-external-secrets 0700 root root -
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Apply runtime directory configuration
+  ansible.builtin.command:
+    argv:
+      - systemd-tmpfiles
+      - --create
+      - /etc/tmpfiles.d/swarm-external-secrets.conf
+  changed_when: false
+
+- name: Install plugin if missing
+  when: swarm_secrets_installed.rc != 0
+  block:
+    - name: Clone plugin source
+      ansible.builtin.git:
+        repo: "{{ swarm_secrets_repo }}"
+        dest: "{{ swarm_secrets_source_dir }}"
+        version: "{{ swarm_secrets_version }}"
+        force: false
+
+    - name: Build plugin
+      ansible.builtin.command:
+        argv:
+          - bash
+          - ./scripts/build.sh
+        chdir: "{{ swarm_secrets_source_dir }}"
+      changed_when: true

@@ -16,6 +16,8 @@ Infrastructure as Code для домашней лаборатории на ба�
 | Gitea | Git-репозитории инфраструктуры и приложений |
 | Nginx Proxy Manager | Reverse proxy и TLS для локальных сервисов |
 | InfluxDB + Grafana | Сбор, хранение и визуализация метрик |
+| OpenBao | Централизованное хранилище секретов (KV v2, AppRole) |
+| swarm-external-secrets | Docker Secrets plugin для получения секретов из OpenBao |
 
 ### Схема инфраструктуры
 
@@ -42,6 +44,10 @@ Infrastructure as Code для домашней лаборатории на ба�
     +---- GitOps ------------------------> Portainer
                                                |
                                            Swarm Stacks
+                                               |
+                                        External Secrets Plugin
+                                               |
+                                    OpenBao LXC 115 (via NPM)
 ```
 
 ## Текущие ресурсы
@@ -64,6 +70,7 @@ Infrastructure as Code для домашней лаборатории на ба�
 | 110 | Grafana | Alpine | 1 | 512 MiB | 2 GiB |
 | 112 | Gitea | Debian | 1 | 512 MiB | 10 GiB |
 | 114 | Gitea Runner | Debian | 1 | 512 MiB | 8 GiB |
+| 115 | OpenBao | Debian 13 | 1 | 384 MiB (первоначально) | 4 GiB |
 
 Назначение основных сервисов:
 
@@ -78,6 +85,7 @@ Infrastructure as Code для домашней лаборатории на ба�
 - **Grafana** — визуализация метрик.
 - **Gitea** — собственный Git-сервер.
 - **Gitea Runner** — выполнение CI/CD jobs.
+- **OpenBao** — хранилище секретов с KV v2 и машинной аутентификацией AppRole.
 
 Контейнеры являются непривилегированными (`unprivileged`) и запускаются автоматически при старте Proxmox.
 
@@ -247,16 +255,7 @@ pveum role list
 
 **Важное замечание:** текущая конфигурация использует отдельные роли для VM и LXC. При расширении инфраструктуры могут потребоваться дополнительные разрешения, например для создания LXC, настройки startup order или других параметров Proxmox.
 
-Выдавать `Administrator` на весь Proxmox без необходимости не рекомендуется.
-
 ### 1.4. Подключение OpenTofu к Proxmox
-
-На локальном компьютере необходимо определить переменные окружения:
-
-```bash
-export PROXMOX_VE_ENDPOINT="https://<PROXMOX_IP>:8006/"
-export PROXMOX_VE_API_TOKEN="opentofu@pve!homelab=<TOKEN_SECRET>"
-```
 
 ## 2. Настройка OpenTofu
 
@@ -272,13 +271,13 @@ cd opentofu
 touch terraform.tfvars
 ```
 
-В текущей конфигурации используется SSH-публичный ключ для Cloud-Init:
+В текущей конфигурации используется SSH-публичный ключ для Cloud-Init + адрес и токен proxmox:
 
 ```hcl
-ssh_public_key = "ssh-ed25519 AAAA... user@host"
+ssh_public_key   = "<your_public_key_here>"
+proxmox_endpoint = "<your_proxmox_endpoint_here>"
+proxmox_token    = "<your_proxmox_token_here>"
 ```
-
-Приватный SSH-ключ в OpenTofu передавать не нужно.
 
 ### Инициализация
 
@@ -383,15 +382,6 @@ ansible-inventory --graph
 ansible all -m ping
 ```
 
-Ожидаемый результат:
-
-```text
-docker-swarm-01 | SUCCESS => {
-    "changed": false,
-    "ping": "pong"
-}
-```
-
 ### Настройка Docker Swarm
 
 ```bash
@@ -408,7 +398,290 @@ ansible-playbook playbooks/portainer.yml
 
 Portainer разворачивается как Docker Swarm stack.
 
-## 5. GitOps и развёртывание приложений
+## 5. OpenBao и Docker Swarm Secrets
+
+### 5.1. Архитектура и состояние
+
+OpenBao развёрнут в LXC `openbao-01` (VMID `115`, Debian 13). Контейнер создаётся OpenTofu, а установка и конфигурация OpenBao выполняются ролью Ansible `openbao`.
+
+- OpenBao: версия `2.7.1` на момент первоначальной настройки.
+- Внутренний API: `http://127.0.0.1:8200` внутри LXC.
+- Хранилище: integrated storage (Raft), `/var/lib/openbao/raft`.
+- Инициализация: 3 unseal key shares, порог 2.
+- KV v2: mount `secret/`, тестовый секрет `secret/apps/test` с полем `message`.
+- Авторизация Swarm: AppRole `swarm`, policy `swarm-read` (read на `secret/data/apps/*`).
+- Docker Swarm: сторонний plugin `swarm-external-secrets:latest`, получение тестового секрета проверено.
+
+### 5.2. Provisioning и установка OpenBao
+
+Из корня репозитория:
+
+```bash
+cd opentofu
+tofu plan
+tofu apply
+```
+
+Убедиться, что новый LXC доступен по SSH. Для Debian 13 LXC используется `root` с SSH-ключом; `sudo` внутри контейнера не требуется. Для доступа нужно добавить описание хоста в ssh config:
+
+```
+Host openbao-01
+    HostName <your_lxc_ip>
+    User root
+    IdentityFile ~/.ssh/<your_key>
+    IdentitiesOnly yes
+```
+
+Выполнить с управляющего компьютера:
+
+```bash
+cd ansible
+ansible-playbook playbooks/openbao.yml
+```
+
+Плейбук использует роль `roles/openbao/`: установка пакета из APT-репозитория OpenBao, шаблон `/etc/openbao/openbao.hcl`, systemd unit и запуск сервиса.
+
+Проверка **внутри LXC**:
+
+```bash
+systemctl status openbao
+journalctl -u openbao -n 100 --no-pager
+export BAO_ADDR=http://127.0.0.1:8200
+bao status
+```
+
+Снаружи проверить TLS и доступность по домену, заведенному в adguard home + TLS proxy в nginx proxy manager:
+
+```bash
+curl -fsS https://<your_openbao_domain>/v1/sys/health
+```
+
+Для активного и распечатанного OpenBao обычно возвращается HTTP 200; запечатанный сервер возвращает другой код.
+
+### 5.3. Инициализация и распечатывание (вручную, однократно)
+
+**Не выполнять `bao operator init` повторно для уже инициализированного хранилища.** На новом пустом хранилище:
+
+```bash
+export BAO_ADDR=http://127.0.0.1:8200
+bao operator init -key-shares=3 -key-threshold=2
+```
+
+Вывод содержит unseal keys и initial root token. Сохранить их в защищённом месте.
+
+После инициализации и **после каждого перезапуска, когда OpenBao запечатан**:
+
+```bash
+bao operator unseal
+bao operator unseal
+bao status
+```
+
+Дважды вводятся **разные** unseal keys (порог 2 из 3). Если auto-unseal не настроен, это ручная операция. Для авторизации:
+
+```bash
+bao login
+```
+
+### 5.4. KV v2 и тестовый секрет (вручную)
+
+Внутри LXC, после `bao login`:
+
+```bash
+bao secrets list -detailed
+```
+
+Если mount `secret/` ещё не существует:
+
+```bash
+bao secrets enable -path=secret -version=2 kv
+```
+
+Создать тестовое значение (не настоящий пароль):
+
+```bash
+bao kv put -mount=secret apps/test message=hello-from-openbao
+bao kv get -mount=secret apps/test
+```
+
+KV v2 API-путь для чтения: `secret/data/apps/test`, в отличие от CLI-пути `secret/apps/test`.
+
+### 5.5. Policy и AppRole для Swarm (вручную)
+
+Создать локальный файл `swarm-read.hcl`:
+
+```hcl
+path "secret/data/apps/*" {
+  capabilities = ["read"]
+}
+```
+
+Применить:
+
+```bash
+bao policy write swarm-read swarm-read.hcl
+bao auth list
+```
+
+Если `approle/` ещё нет:
+
+```bash
+bao auth enable approle
+```
+
+Создать роль:
+
+```bash
+bao write auth/approle/role/swarm \
+  token_policies="swarm-read" \
+  token_ttl="1h" \
+  token_max_ttl="4h" \
+  token_no_default_policy=true \
+  secret_id_ttl="0" \
+  secret_id_num_uses=0
+```
+
+Получить Role ID и Secret ID:
+
+```bash
+bao read -field=role_id auth/approle/role/swarm/role-id
+bao write -field=secret_id -f auth/approle/role/swarm/secret-id
+```
+
+Secret ID не имеет срока действия и лимита использований в текущем тестовом варианте. Он должен храниться как пароль; позже требуется спланировать ротацию и ограничить доступ. Policy `swarm-read` разрешает чтение **всех** секретов под `apps/*`
+
+### 5.6. Ansible Vault и inventory (вручную)
+
+Роль `swarm_secrets` требует переменных `swarm_secrets_openbao_role_id` и `swarm_secrets_openbao_secret_id`.
+
+Пример расположения:
+
+```text
+ansible/
+├── inventory/
+│   ├── hosts.yml
+│   └── group_vars/
+│       └── docker_swarm_managers/
+│           ├── main.yml
+│           └── vault.yml
+├── playbooks/
+│   ├── openbao.yml
+│   └── swarm-secrets.yml
+└── roles/
+    ├── openbao/
+    └── swarm_secrets/
+```
+
+В `inventory/group_vars/docker_swarm_managers/main.yml`:
+
+```yaml
+swarm_secrets_openbao_role_id: "REPLACE_WITH_ROLE_ID"
+swarm_secrets_openbao_secret_id: "{{ vault_swarm_openbao_secret_id }}"
+```
+
+Создать зашифрованный файл:
+
+```bash
+cd ansible
+ansible-vault create inventory/group_vars/docker_swarm_managers/vault.yml
+```
+
+Его **расшифрованное** содержимое:
+
+```yaml
+vault_swarm_openbao_secret_id: "REPLACE_WITH_SECRET_ID"
+```
+
+Зашифрованный файл допустимо хранить в Git, пароль Ansible Vault — нет. Не хранить Secret ID в незашифрованных переменных, Compose или коммитах.
+
+Проверить, что хост действительно входит в группу `docker_swarm_managers`:
+
+```bash
+ansible-inventory --graph
+```
+
+Проверить только **факт наличия** переменной, без вывода её значения:
+
+```bash
+ansible docker-swarm-01 -m ansible.builtin.debug \
+  -a 'msg={{ swarm_secrets_openbao_role_id is defined }}' \
+  --ask-vault-pass
+```
+
+Если Ansible сообщает `swarm_secrets_openbao_role_id is undefined`, проверить имя группы, путь `group_vars` и используемый inventory.
+
+### 5.7. Установка Docker Secrets plugin через Ansible
+
+Роль: `roles/swarm_secrets/`, playbook: `playbooks/swarm-secrets.yml`. Запускать с управляющего компьютера:
+
+```bash
+cd ansible
+ansible-playbook playbooks/swarm-secrets.yml --ask-vault-pass
+```
+
+Роль скачивает исходники `sugar-org/swarm-external-secrets`, собирает Docker plugin, настраивает OpenBao/AppRole и включает plugin на `docker-swarm-01`.
+
+Проверка (на Swarm VM):
+
+```bash
+docker plugin ls
+docker plugin inspect swarm-external-secrets:latest
+```
+
+Роль пока не считается полностью идемпотентной и безопасной для автоматической ротации. Если параметры включённого плагина изменились, их применение требует отдельного maintenance window: Docker plugin нужно отключать для изменения настроек. Не использовать принудительное отключение работающего плагина без анализа зависимостей. Ротация Secret ID, контроль drift и upgrade остаются задачами на будущее.
+
+### 5.8. Проверка получения секрета из Swarm
+
+Тестовый Compose-файл для отдельного stack:
+
+```yaml
+services:
+  openbao-test:
+    image: alpine:3.22
+    command:
+      - sh
+      - -c
+      - |
+        test -s /run/secrets/test_message
+        echo "OpenBao secret mounted successfully"
+        sleep 3600
+    secrets:
+      - test_message
+    deploy:
+      replicas: 1
+
+secrets:
+  test_message:
+    driver: swarm-external-secrets:latest
+    labels:
+      openbao_path: "apps/test"
+      openbao_field: "message"
+```
+
+Этот формат был использован как ориентир для тестирования; при изменении версии плагина сверять labels с его документацией и рабочим Compose. Тест интеграции **успешно пройден**.
+
+Развернуть с Swarm Manager в директории тестового Compose:
+
+```bash
+docker stack deploy -c compose.yml openbao-test
+docker service ps openbao-test_openbao-test
+docker service logs openbao-test_openbao-test
+```
+
+Ожидаем строку `OpenBao secret mounted successfully`. Настоящие секреты в логи не печатать.
+
+### 5.9. Эксплуатация, безопасность и восстановление
+
+- После перезапуска OpenBao проверить `bao status` и при необходимости вручную выполнить unseal.
+- После перезапуска Swarm VM проверить `docker plugin ls` и наличие `/run/swarm-external-secrets`.
+- Не передавать root token приложениям; использовать ограниченные AppRole.
+- `no_log: true` скрывает параметры в выводе Ansible, но не исключает хранения credentials в конфигурации Docker plugin и их видимости администраторам Docker.
+- Перед обновлением плагина оценить влияние на существующие Docker services и подготовить откат.
+- Сохранить unseal keys и рабочий административный доступ вне сервера.
+- Настроить Raft snapshots и регулярно проверять восстановление.
+- При восстановлении из резервной копии **не** инициализировать поверх существующих данных.
+
+## 6. GitOps и развёртывание приложений
 
 Для развёртывания пользовательских приложений используется **Portainer CE с GitOps polling**.
 
@@ -476,8 +749,6 @@ Portainer обнаружит новый коммит и применит обн�
 
 **Ограничение:** Portainer не обнаруживает новые Compose-файлы автоматически. Каждый новый stack нужно зарегистрировать один раз вручную или через Portainer API.
 
-Также Portainer GitOps не является полноценным аналогом Argo CD с непрерывным восстановлением любого drift.
-
 ## 7. Резервное копирование
 
 Критически важные данные:
@@ -489,6 +760,8 @@ Portainer обнаружит новый коммит и применит обн�
 | PostgreSQL | Логические и/или физические резервные копии БД |
 | Vaultwarden | База данных, вложения, конфигурация |
 | Gitea | Репозитории, БД, конфигурация |
+| OpenBao | Raft snapshots, конфигурация, отдельно сохранённые unseal keys и процедура восстановления |
+| Ansible Vault | Зашифрованные файлы и отдельно сохранённый пароль Vault |
 
 Рекомендуется следовать правилу **3-2-1**:
 
@@ -496,7 +769,7 @@ Portainer обнаружит новый коммит и применит обн�
 - Два разных типа носителей или независимых места хранения.
 - Одна копия вне основного сервера.
 
-## 9. Дальнейшие планы
+## 8. Дальнейшие планы
 
 - [x] Перенести существующие LXC под управление OpenTofu.
 - [x] Перенести PostgreSQL VM под управление OpenTofu.
@@ -512,7 +785,13 @@ Portainer обнаружит новый коммит и применит обн�
 - [ ] Настроить мониторинг Docker через node-exporter и cAdvisor.
 - [ ] Подключить метрики Proxmox к InfluxDB и Grafana.
 - [ ] Настроить доступ к Swarm-приложениям через Nginx Proxy Manager.
-- [ ] Централизовать управление секретами.
+- [x] Развернуть OpenBao в LXC через OpenTofu и Ansible.
+- [x] Настроить KV v2, тестовую policy и AppRole для Docker Swarm.
+- [x] Подключить swarm-external-secrets и проверить тестовый секрет.
+- [ ] Настроить резервное копирование Raft и проверить восстановление OpenBao.
+- [ ] Довести роль swarm_secrets до проверенной идемпотентности и безопасной ротации credentials.
+- [ ] Разделить политики доступа к секретам по приложениям.
+- [ ] Перенести реальные секреты приложений в OpenBao.
 - [ ] Автоматизировать регистрацию новых GitOps stacks через Portainer API.
 - [ ] Настроить уведомления о сбоях через Gotify.
 - [ ] Рассмотреть расширение Swarm на дополнительные ноды.

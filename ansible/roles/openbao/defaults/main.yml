@@ -1,0 +1,19 @@
+---
+openbao_package: openbao
+
+openbao_user: openbao
+openbao_group: openbao
+
+openbao_config_dir: /etc/openbao
+openbao_data_dir: /var/lib/openbao
+
+openbao_listen_address: "0.0.0.0:8200"
+openbao_cluster_address: "127.0.0.1:8201"
+
+openbao_api_addr: "https://bao.home.artemowkin.ru"
+openbao_cluster_addr: "https://127.0.0.1:8201"
+
+openbao_raft_node_id: openbao-01
+
+openbao_ui: true
+openbao_log_level: info

@@ -1,0 +1,6 @@
+---
+- name: Install external secrets plugin
+  ansible.builtin.import_tasks: install.yml
+
+- name: Configure external secrets plugin
+  ansible.builtin.import_tasks: configure.yml

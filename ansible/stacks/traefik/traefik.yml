@@ -1,0 +1,30 @@
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+  websecure:
+    address: ":443"
+providers:
+  swarm:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: traefik-public
+    watch: true
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: "artyom.groshev@gmail.com"
+      storage: /data/acme.json
+      dnsChallenge:
+        provider: regru
+        resolvers:
+          - "1.1.1.1:53"
+          - "8.8.8.8:53"
+        propagation:
+          delayBeforeChecks: 300s
+log:
+  level: INFO

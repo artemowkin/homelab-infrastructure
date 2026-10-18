@@ -1,0 +1,107 @@
+---
+- name: Inspect Docker plugin
+  ansible.builtin.command:
+    argv:
+      - docker
+      - plugin
+      - inspect
+      - "{{ swarm_secrets_plugin_name }}"
+  register: swarm_secrets_inspect
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Parse plugin state
+  ansible.builtin.set_fact:
+    swarm_secrets_plugin: >-
+      {{ (swarm_secrets_inspect.stdout | from_json)[0] }}
+  no_log: true
+
+- name: Build desired plugin settings
+  ansible.builtin.set_fact:
+    swarm_secrets_desired_env:
+      SECRETS_PROVIDER: openbao
+      OPENBAO_ADDR: "{{ swarm_secrets_openbao_addr }}"
+      OPENBAO_AUTH_METHOD: "{{ swarm_secrets_openbao_auth_method }}"
+      OPENBAO_ROLE_ID: "{{ swarm_secrets_openbao_role_id }}"
+      OPENBAO_SECRET_ID: "{{ swarm_secrets_openbao_secret_id }}"
+      OPENBAO_MOUNT_PATH: "{{ swarm_secrets_openbao_mount_path }}"
+      ENABLE_MONITORING: "{{ swarm_secrets_monitoring_enabled | string | lower }}"
+      ENABLE_ROTATION: "{{ swarm_secrets_rotation_enabled | string | lower }}"
+  no_log: true
+
+- name: Parse current plugin settings
+  ansible.builtin.set_fact:
+    swarm_secrets_current_env: >-
+      {{
+        dict(
+          (swarm_secrets_plugin.Settings.Env | default([]))
+          | map('split', '=', 1)
+        )
+      }}
+  no_log: true
+
+- name: Initialize drift flag
+  ansible.builtin.set_fact:
+    swarm_secrets_config_changed: false
+
+- name: Detect plugin configuration drift
+  ansible.builtin.set_fact:
+    swarm_secrets_config_changed: true
+  loop: "{{ swarm_secrets_desired_env | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: swarm_secrets_current_env.get(item.key) != item.value
+  no_log: true
+
+- name: Require maintenance for plugin reconfiguration
+  ansible.builtin.assert:
+    that:
+      - not swarm_secrets_config_changed
+        or not swarm_secrets_plugin.Enabled
+        or swarm_secrets_allow_reconfigure | bool
+    fail_msg: >-
+      Docker plugin configuration differs from Ansible.
+      Reconfiguration requires a maintenance window.
+      Set swarm_secrets_allow_reconfigure=true explicitly.
+
+- name: Disable plugin for reconfiguration
+  ansible.builtin.command:
+    argv:
+      - docker
+      - plugin
+      - disable
+      - "{{ swarm_secrets_plugin_name }}"
+  when:
+    - swarm_secrets_config_changed
+    - swarm_secrets_plugin.Enabled
+    - swarm_secrets_allow_reconfigure | bool
+
+- name: Apply plugin configuration
+  ansible.builtin.command:
+    argv: >-
+      {{
+        ['docker', 'plugin', 'set', swarm_secrets_plugin_name]
+        +
+        (
+          swarm_secrets_desired_env
+          | dict2items
+          | map(attribute='key')
+          | zip(swarm_secrets_desired_env.values() | list)
+          | map('join', '=')
+          | list
+        )
+      }}
+  when: swarm_secrets_config_changed
+  no_log: true
+
+- name: Enable plugin
+  ansible.builtin.command:
+    argv:
+      - docker
+      - plugin
+      - enable
+      - "{{ swarm_secrets_plugin_name }}"
+  when: >
+    not swarm_secrets_plugin.Enabled
+    or swarm_secrets_config_changed

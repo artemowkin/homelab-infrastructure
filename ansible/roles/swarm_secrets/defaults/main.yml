@@ -1,0 +1,18 @@
+---
+swarm_secrets_plugin_name: "swarm-external-secrets:latest"
+
+swarm_secrets_repo: >-
+  https://github.com/sugar-org/swarm-external-secrets.git
+
+swarm_secrets_version: "15baacf345c5db6132c36875e8710e67b8eb46c1"
+
+swarm_secrets_source_dir: /opt/swarm-external-secrets
+
+swarm_secrets_openbao_addr: >-
+  https://bao.home.artemowkin.ru
+
+swarm_secrets_monitoring_enabled: false
+swarm_secrets_rotation_enabled: false
+swarm_secrets_allow_reconfigure: false
+swarm_secrets_openbao_auth_method: approle
+swarm_secrets_openbao_mount_path: secret

@@ -40,6 +40,14 @@ resource "proxmox_virtual_environment_container" "lxc" {
   initialization {
     hostname = each.value.hostname
 
+    dynamic "user_account" {
+      for_each = try(each.value.ssh_public_keys, null) != null ? [1] : []
+
+      content {
+        keys = each.value.ssh_public_keys
+      }
+    }
+
     ip_config {
       ipv4 {
         address = "dhcp"

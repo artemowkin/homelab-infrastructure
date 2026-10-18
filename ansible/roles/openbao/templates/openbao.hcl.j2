@@ -1,0 +1,20 @@
+ui = {{ openbao_ui | ternary("true", "false") }}
+
+log_level = "{{ openbao_log_level }}"
+
+api_addr = "{{ openbao_api_addr }}"
+cluster_addr = "{{ openbao_cluster_addr }}"
+
+storage "raft" {
+  path    = "{{ openbao_data_dir }}/raft"
+  node_id = "{{ openbao_raft_node_id }}"
+}
+
+listener "tcp" {
+  address         = "{{ openbao_listen_address }}"
+  cluster_address = "{{ openbao_cluster_address }}"
+
+  tls_disable = true
+
+  disable_unauthed_generate_root_endpoints = true
+}

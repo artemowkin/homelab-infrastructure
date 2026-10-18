@@ -1,0 +1,3 @@
+---
+swarm_secrets_openbao_role_id: "9dd02dde-3810-abc6-e3d1-71b1300eb72d"
+swarm_secrets_openbao_secret_id: "{{ vault_swarm_openbao_secret_id }}"

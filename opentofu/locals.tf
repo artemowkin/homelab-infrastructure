@@ -134,6 +134,21 @@ locals {
       startup_order    = 3
       startup_up_delay = 0
     }
+
+    openbao = {
+      vm_id           = 115
+      hostname        = "openbao"
+      description     = "OpenBao secrets management"
+      ssh_public_keys = [var.ssh_public_key]
+
+      cores  = 1
+      memory = 384
+      swap   = 256
+      disk   = 4
+
+      on_boot  = true
+      firewall = true
+    }
   }
 
   vms = {

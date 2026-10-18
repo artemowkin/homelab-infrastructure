@@ -1,0 +1,29 @@
+[Unit]
+Description=OpenBao Secrets Management
+Documentation=https://openbao.org/docs/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+User={{ openbao_user }}
+Group={{ openbao_group }}
+
+ExecStart=/usr/bin/bao server -config={{ openbao_config_dir }}/openbao.hcl
+
+Restart=on-failure
+
+RestartSec=5
+
+LimitNOFILE=65536
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths={{ openbao_data_dir }}
+
+[Install]
+WantedBy=multi-user.target

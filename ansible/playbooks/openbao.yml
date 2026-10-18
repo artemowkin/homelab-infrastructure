@@ -1,0 +1,7 @@
+---
+- name: Install and configure OpenBao
+  hosts: openbao
+  become: false
+
+  roles:
+    - openbao

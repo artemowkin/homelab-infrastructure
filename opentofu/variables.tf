@@ -3,6 +3,16 @@ variable "proxmox_node" {
   default = "proxmox"
 }
 
+variable "proxmox_token" {
+  type        = string
+  description = "proxmox api token"
+}
+
+variable "proxmox_endpoint" {
+  type        = string
+  description = "proxmox api endpoint"
+}
+
 variable "lxc_debian_template_url" {
   type        = string
   description = "Direct URL to the Debian 13 LXC template"

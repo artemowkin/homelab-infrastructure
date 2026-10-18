@@ -1,0 +1,44 @@
+---
+- name: Install APT dependencies
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - python3-debian
+    state: present
+    update_cache: true
+
+- name: Create APT keyring directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Download OpenBao signing key
+  ansible.builtin.get_url:
+    url: https://openbao.org/assets/openbao-gpg-pub-20240618.asc
+    dest: /etc/apt/keyrings/openbao.asc
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Add OpenBao APT repository
+  ansible.builtin.deb822_repository:
+    name: openbao
+    types:
+      - deb
+    uris:
+      - https://pkgs.openbao.org/deb/
+    suites:
+      - stable
+    components:
+      - main
+    signed_by: /etc/apt/keyrings/openbao.asc
+    state: present
+    enabled: true
+  register: openbao_repository
+
+- name: Install OpenBao
+  ansible.builtin.apt:
+    name: "{{ openbao_package }}"
+    state: present
+    update_cache: "{{ openbao_repository.changed }}"
